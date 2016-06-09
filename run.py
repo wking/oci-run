@@ -37,10 +37,11 @@ _REAPED_CHILDREN = {}
 
 
 class HookError(RuntimeError):
-    def __init__(self, hook, status):
+    def __init__(self, hook, name, status):
         self.hook = hook
+        self.name = name
         self.status = status
-        message = 'hook {} exited with status {}'.format(hook, status)
+        message = '{} exited with status {}'.format(name, status)
         super(HookError, self).__init__(message)
 
 
@@ -96,16 +97,18 @@ def _run(name, **kwargs):
     return status
 
 
-def _run_hook(name, hook, state_bytes, strict=True):
-    status = _run(
-        name=name,
-        args=hook['args'],
-        executable=hook.get('path'),
-        env=hook.get('env'),
-        stdin=state_bytes,
-    )
-    if status != 0 and strict:
-        raise HookError(hook=hook, status=status)
+def _run_hooks(event, hooks, state_bytes, strict=True):
+    for i, hook in enumerate(hooks.get(event, [])):
+        name = 'hook {}[{}]'.format(event, i)
+        status = _run(
+            name=name,
+            args=hook['args'],
+            executable=hook.get('path'),
+            env=hook.get('env'),
+            stdin=state_bytes,
+        )
+        if status != 0 and strict:
+            raise HookError(hook=hook, name=name, status=status)
 
 
 def _delete(runtime, container_id):
@@ -145,23 +148,20 @@ def main(runtime=['runc'], container_id=None):
     state = _json.loads(state_bytes.decode('UTF-8'))
     container_pid = state['pid']
 
-    for i, hook in enumerate(hooks.get('prestart', [])):
-        _LOG.info('run pre-start hook {}'.format(i))
-        try:
-            _run_hook(hook=hook, state_bytes=state_bytes)
-        except HookError as error:
-            status = error.status
-            _delete(runtime=runtime, container_id=container_id)
-            _sys.exit(1)
+    try:
+        _run_hooks(event='prestart', hooks=hooks, state_bytes=state_bytes)
+    except HookError as error:
+        status = error.status
+        _delete(runtime=runtime, container_id=container_id)
+        _sys.exit(1)
 
     status = _run(name='start', args=runtime + ['start', container_id])
     if status != 0:
         _delete(runtime=runtime, container_id=container_id)
         _sys.exit(1)
 
-    for i, hook in enumerate(hooks.get('poststart', [])):
-        _LOG.info('run post-start hook {}'.format(i))
-        _run_hook(hook=hook, state_bytes=state_bytes, strict=False)
+    _run_hooks(
+        event='poststart', hooks=hooks, state_bytes=state_bytes, strict=False)
 
     _LOG.debug('waiting on container process {}'.format(container_pid))
     while container_pid not in _REAPED_CHILDREN:
@@ -169,9 +169,8 @@ def main(runtime=['runc'], container_id=None):
     status = _REAPED_CHILDREN[container_pid]
     _LOG.debug('container process exited with {}'.format(status))
 
-    for i, hook in enumerate(hooks.get('poststop', [])):
-        _LOG.info('run post-stop hook {}'.format(i))
-        _run_hook(hook=hook, state_bytes=state_bytes, strict=False)
+    _run_hooks(
+        event='poststop', hooks=hooks, state_bytes=state_bytes, strict=False)
 
     _delete(runtime=runtime, container_id=container_id)
     if status > 127:
