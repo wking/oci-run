@@ -68,38 +68,48 @@ def _get_hooks(path='hooks.json', keys=None):
     return hooks
 
 
-def _run_hook(hook, state_bytes, strict=True):
-    _LOG.info('run hook: {}'.format(hook))
-    hook_process = _subprocess.Popen(
+def _run(name, **kwargs):
+    if isinstance(kwargs.get('stdin'), bytes):
+        if 'stdout' in kwargs or 'stderr' in kwargs:
+            raise NotImplementedError(
+                'cannot write bytes to stdin if stdout or stderr are specified'
+            )
+        stdin = kwargs['stdin']
+        kwargs['stdin'] = _subprocess.PIPE
+    else:
+        stdin = None
+    process = _subprocess.Popen(**kwargs)
+    _LOG.debug('spawned {} process with PID {}'.format(name, process.pid))
+    if stdin:
+        try:
+            # stdin is buffered in the kernel, so this won't block for
+            # sufficiently small state
+            process.stdin.write(stdin)
+            process.stdin.flush()
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+    while process.pid not in _REAPED_CHILDREN:
+        _signal.pause()
+    status = _REAPED_CHILDREN[process.pid]
+    _LOG.debug('{} process exited with {}'.format(name, status))
+    return status
+
+
+def _run_hook(name, hook, state_bytes, strict=True):
+    status = _run(
+        name=name,
         args=hook['args'],
         executable=hook.get('path'),
         env=hook.get('env'),
-        stdin=_subprocess.PIPE,
+        stdin=state_bytes,
     )
-    _LOG.debug('spawned hook process with PID {}'.format(hook_process.pid))
-    try:
-        # stdin is buffered in the kernel, so this won't block for
-        # sufficiently small state
-        hook_process.stdin.write(state_bytes)
-        hook_process.stdin.flush()
-        hook_process.stdin.close()
-    except BrokenPipeError:
-        pass
-    while hook_process.pid not in _REAPED_CHILDREN:
-        _signal.pause()
-    status = _REAPED_CHILDREN[hook_process.pid]
-    _LOG.debug('hook process exited with {}'.format(status))
     if status != 0 and strict:
         raise HookError(hook=hook, status=status)
 
 
 def _delete(runtime, container_id):
-    delete_process = _subprocess.Popen(args=runtime + ['delete', container_id])
-    _LOG.debug('spawned delete process with PID {}'.format(delete_process.pid))
-    while delete_process.pid not in _REAPED_CHILDREN:
-        _signal.pause()
-    status = _REAPED_CHILDREN[delete_process.pid]
-    _LOG.debug('delete process exited with {}'.format(status))
+    _run(name='delete', args=runtime + ['delete', container_id])
 
 
 def main(runtime=['runc'], container_id=None):
@@ -111,12 +121,7 @@ def main(runtime=['runc'], container_id=None):
 
     hooks = _get_hooks(path='hooks.json')
 
-    create_process = _subprocess.Popen(args=runtime + ['create', container_id])
-    _LOG.debug('spawned create process with PID {}'.format(create_process.pid))
-    while create_process.pid not in _REAPED_CHILDREN:
-        _signal.pause()
-    status = _REAPED_CHILDREN[create_process.pid]
-    _LOG.debug('create process exited with {}'.format(status))
+    status = _run(name='create', args=runtime + ['create', container_id])
     if status != 0:
         _sys.exit(1)
 
@@ -149,12 +154,7 @@ def main(runtime=['runc'], container_id=None):
             _delete(runtime=runtime, container_id=container_id)
             _sys.exit(1)
 
-    start_process = _subprocess.Popen(args=runtime + ['start', container_id])
-    _LOG.debug('spawned start process with PID {}'.format(start_process.pid))
-    while start_process.pid not in _REAPED_CHILDREN:
-        _signal.pause()
-    status = _REAPED_CHILDREN[start_process.pid]
-    _LOG.debug('start process exited with {}'.format(status))
+    status = _run(name='start', args=runtime + ['start', container_id])
     if status != 0:
         _delete(runtime=runtime, container_id=container_id)
         _sys.exit(1)
