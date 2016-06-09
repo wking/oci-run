@@ -50,6 +50,24 @@ def _reap(signal, frame):
     _REAPED_CHILDREN[pid] = status
 
 
+def _get_hooks(path='hooks.json', keys=None):
+    try:
+        with open(path, 'rb') as f:
+            hook_bytes = f.read()
+    except FileNotFoundError:
+        hooks = {}
+    else:
+        hooks = _json.loads(hook_bytes.decode('UTF-8'))
+        if keys:
+            for key in keys:
+                hooks = hooks.get(key, {})
+    for event in ['prestart', 'poststart', 'poststop']:
+        for hook in hooks.get(event, []):
+            if 'timeout' in hook:
+                raise NotImplementedError('hook.timeout is not supported yet')
+    return hooks
+
+
 def _run_hook(hook, state_bytes, strict=True):
     _LOG.info('run hook: {}'.format(hook))
     hook_process = _subprocess.Popen(
@@ -91,16 +109,7 @@ def main(runtime=['runc'], container_id=None):
     _signal.signal(_signal.SIGCHLD, _reap)
     _prctl.set_child_subreaper(1)
 
-    try:
-        with open('hooks.json', 'rb') as f:
-            hook_bytes = f.read()
-            hooks = _json.loads(hook_bytes.decode('UTF-8'))
-    except FileNotFoundError:
-        hooks = {}
-    for event in ['prestart', 'poststart', 'poststop']:
-        for hook in hooks.get(event, []):
-            if 'timeout' in hook:
-                raise NotImplementedError('hook.timeout is not supported yet')
+    hooks = _get_hooks(path='hooks.json')
 
     create_process = _subprocess.Popen(args=runtime + ['create', container_id])
     _LOG.debug('spawned create process with PID {}'.format(create_process.pid))
