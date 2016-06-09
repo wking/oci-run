@@ -186,10 +186,17 @@ def main(runtime=['runc'], container_id=None):
 if __name__ == '__main__':
     parser = _argparse.ArgumentParser()
     parser.add_argument(
+        '-l', '--log-level',
+        default='error',
+        choices=['critical', 'error', 'warning', 'info', 'debug'],
+        help='Set the log level (verbosity)')
+    parser.add_argument(
         '-r', '--runtime', action='append',
         help='The base runtime command (e.g. -r sudo -r runc)')
 
     args = parser.parse_args()
 
-    _LOG.setLevel(_logging.DEBUG)
+    log_level = getattr(_logging, args.log_level.upper())
+    _LOG.setLevel(log_level)
+
     main(runtime=args.runtime)
