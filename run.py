@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import argparse as _argparse
 import json as _json
 import logging as _logging
 import os as _os
@@ -183,5 +184,12 @@ def main(runtime=['runc'], container_id=None):
 
 
 if __name__ == '__main__':
+    parser = _argparse.ArgumentParser()
+    parser.add_argument(
+        '-r', '--runtime', action='append',
+        help='The base runtime command (e.g. -r sudo -r runc)')
+
+    args = parser.parse_args()
+
     _LOG.setLevel(_logging.DEBUG)
-    main()
+    main(runtime=args.runtime)
