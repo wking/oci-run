@@ -111,6 +111,27 @@ def _run_hooks(event, hooks, state_bytes, strict=True):
             raise HookError(hook=hook, name=name, status=status)
 
 
+def _state(runtime, container_id):
+    process = _subprocess.Popen(
+        args=runtime + ['state', container_id],
+        stdin=_subprocess.PIPE,
+        stdout=_subprocess.PIPE,
+    )
+    _LOG.debug('spawned state process with PID {}'.format(process.pid))
+    state_bytes, stderr = process.communicate()
+    while process.pid not in _REAPED_CHILDREN:
+        _signal.pause()
+    status = _REAPED_CHILDREN[process.pid]
+    _LOG.debug('state process exited with {}'.format(status))
+    if status != 0:
+        _delete(runtime=runtime, container_id=container_id)
+        _sys.exit(1)
+
+    state = _json.loads(state_bytes.decode('UTF-8'))
+    container_pid = state['pid']
+    return (state_bytes, container_pid)
+
+
 def _delete(runtime, container_id):
     _run(name='delete', args=runtime + ['delete', container_id])
 
@@ -128,25 +149,8 @@ def main(runtime=['runc'], container_id=None):
     if status != 0:
         _sys.exit(1)
 
-    state_process = _subprocess.Popen(
-        args=runtime + ['state', container_id],
-        stdin=_subprocess.PIPE,
-        stdout=_subprocess.PIPE,
-        stderr=_subprocess.PIPE,
-    )
-    _LOG.debug('spawned state process with PID {}'.format(state_process.pid))
-    state_bytes, stderr = state_process.communicate()
-    while state_process.pid not in _REAPED_CHILDREN:
-        _signal.pause()
-    status = _REAPED_CHILDREN[state_process.pid]
-    _LOG.debug('state process exited with {}'.format(status))
-    if status != 0:
-        _LOG.error(stderr.strip())
-        _delete(runtime=runtime, container_id=container_id)
-        _sys.exit(1)
-
-    state = _json.loads(state_bytes.decode('UTF-8'))
-    container_pid = state['pid']
+    state_bytes, container_pid = _state(
+        runtime=runtime, container_id=container_id)
 
     try:
         _run_hooks(event='prestart', hooks=hooks, state_bytes=state_bytes)
